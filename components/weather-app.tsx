@@ -7,9 +7,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart, Bar, PieChart, Pie, Cell, Legend } from 'recharts'
-import { Droplets, Sun, Wind, Search, Mic, Moon, Thermometer, CloudRain, Umbrella, Compass, Maximize2, Minimize2, HelpCircle, MapPin, BarChart as BarChartIcon, Settings } from 'lucide-react'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell, Legend } from 'recharts'
+import { Droplets, Sun, Wind, Search, Mic, Moon, Thermometer, CloudRain, Umbrella, Compass, Maximize2, Minimize2, HelpCircle, MapPin, BarChart as BarChartIcon, Settings, Cloud, CloudSun, CloudMoon, Snowflake, CloudLightning, CloudDrizzle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useTranslation } from 'react-i18next';
+import '../i18n'; // Import the i18n configuration
+import Image from 'next/image'; // Add this import
 
 const languages = [
   { code: 'en', name: 'English' },
@@ -43,12 +46,27 @@ const getAQILabel = (aqi: number) => {
   return "Hazardous"
 }
 
-// ... existing imports ...
+// Add this type definition for OpenWeatherMap API responses
+type OpenWeatherMapWeatherResponse = {
+  main: { temp: number; feels_like: number; humidity: number; pressure: number };
+  wind: { speed: number };
+  weather: Array<{ description: string }>;
+  rain?: { '1h': number };
+};
 
-// Add this type definition
+type OpenWeatherMapForecastResponse = {
+  list: Array<{
+    dt: number;
+    main: { temp: number };
+    pop: number;
+  }>;
+};
+
+// Add this type definition at the top of the file, after the other type definitions
 type WeatherData = {
   current: {
     temp: number;
+    feels_like: number;
     humidity: number;
     windSpeed: number;
     description: string;
@@ -57,19 +75,73 @@ type WeatherData = {
     uv_index: number;
   };
   forecast: Array<{ day: string; temp: number; precipitation: number }>;
-  aqi: number;
-  airQualityHistory: Array<{ date: string; pm10: number; pm2_5: number; o3: number; no2: number; so2: number }>;
+  aqi: {
+    aqi: number;
+    pm10: number;
+    pm25: number;
+    o3: number;
+    no2: number;
+    so2: number;
+    co: number;
+  } | null;
+  airQualityHistory: Array<{
+    date: string;
+    pm10: number;
+    pm2_5: number;
+    o3: number;
+    no2: number;
+    so2: number;
+  }>;
   hourlyForecast: Array<{ time: string; temp: number; precipitation: number }>;
 };
 
+// Add this near the top of the file
+const OPENWEATHERMAP_API_KEY = "9521977450572951a59964c05f914d23";
+const AQICN_API_KEY = "d0b090140c194757591d63281c018c91e5ee8298"; // Replace with your actual AQICN API key
+
+// Add a new type for AQICN API response
+type AQICNResponse = {
+  status: string;
+  data: {
+    aqi: number;
+    iaqi: {
+      pm10: { v: number };
+      pm25: { v: number };
+      o3: { v: number };
+      no2: { v: number };
+      so2: { v: number };
+      co: { v: number };
+      uvi?: { v: number }; // Add UVI to the type
+    };
+  };
+};
+
+type Suggestion = {
+  name: string;
+  country: string;
+  countryCode: string; // Add this field
+};
+
+// Add this type definition near the top of the file
+type GeocodingResult = {
+  name: string;
+  country: string;
+  // Add other properties if needed
+};
+
 export function WeatherApp() {
+  const { t, i18n } = useTranslation();
   const [weatherData, setWeatherData] = useState<WeatherData | null>(null)
   const [darkMode, setDarkMode] = useState(false)
   const [language, setLanguage] = useState('en')
-  const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
+  const [inputValue, setInputValue] = useState('');
+  const [selectedLocation, setSelectedLocation] = useState('');
+  const [isAutoSearch, setIsAutoSearch] = useState(false);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
 
   useEffect(() => {
     if (darkMode) {
@@ -80,201 +152,263 @@ export function WeatherApp() {
   }, [darkMode])
 
   const fetchWeatherData = async (lat: number, lon: number) => {
+    setLoading(true);
+    setError(null);
     try {
-      const weatherResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code,precipitation,pressure_msl,uv_index&hourly=temperature_2m,precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto`)
-      const weatherData = await weatherResponse.json()
+      const [weatherResponse, forecastResponse] = await Promise.all([
+        fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${OPENWEATHERMAP_API_KEY}`),
+        fetch(`https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&units=metric&appid=${OPENWEATHERMAP_API_KEY}`)
+      ]);
 
-      const airQualityResponse = await fetch(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&current=european_aqi,pm10,pm2_5,ozone,nitrogen_dioxide,sulphur_dioxide&hourly=pm10,pm2_5,ozone,nitrogen_dioxide,sulphur_dioxide&timezone=auto`)
-      const airQualityData = await airQualityResponse.json()
+      const [weatherData, forecastData]: [OpenWeatherMapWeatherResponse, OpenWeatherMapForecastResponse] = await Promise.all([
+        weatherResponse.json(),
+        forecastResponse.json()
+      ]);
+
+      const aqiData = await fetchAQIData(lat, lon);
+      const locationName = await fetchLocationName(lat, lon);
+      setSelectedLocation(locationName);
 
       setWeatherData({
         current: {
-          temp: weatherData.current.temperature_2m,
-          humidity: weatherData.current.relative_humidity_2m,
-          windSpeed: weatherData.current.wind_speed_10m,
-          description: getWeatherDescription(weatherData.current.weather_code),
-          precipitation: weatherData.current.precipitation,
-          pressure: weatherData.current.pressure_msl,
-          uv_index: weatherData.current.uv_index
+          temp: weatherData.main.temp,
+          feels_like: weatherData.main.feels_like,
+          humidity: weatherData.main.humidity,
+          windSpeed: weatherData.wind.speed,
+          description: weatherData.weather[0].description,
+          precipitation: weatherData.rain?.['1h'] || 0,
+          pressure: weatherData.main.pressure,
+          uv_index: aqiData?.uvi || 0 // Use the UVI from AQICN API
         },
-        forecast: weatherData.daily.time.map((day: string, index: number) => ({
-          day: new Date(day).toLocaleDateString('en', { weekday: 'short' }),
-          temp: (weatherData.daily.temperature_2m_max[index] + weatherData.daily.temperature_2m_min[index]) / 2,
-          precipitation: weatherData.daily.precipitation_sum[index]
+        forecast: forecastData.list.filter((item, index) => index % 8 === 0).slice(0, 7).map((day) => ({
+          day: new Date(day.dt * 1000).toLocaleDateString('en', { weekday: 'short' }),
+          temp: day.main.temp,
+          precipitation: day.pop * 100 // Convert probability to percentage
         })),
-        aqi: airQualityData.current.european_aqi,
-        airQualityHistory: airQualityData.hourly.time.slice(0, 24).map((time: string, index: number) => ({
-          date: new Date(time).toLocaleTimeString('en', { hour: '2-digit', hour12: false }),
-          pm10: airQualityData.hourly.pm10[index],
-          pm2_5: airQualityData.hourly.pm2_5[index],
-          o3: airQualityData.hourly.ozone[index],
-          no2: airQualityData.hourly.nitrogen_dioxide[index],
-          so2: airQualityData.hourly.sulphur_dioxide[index]
-        })),
-        hourlyForecast: weatherData.hourly.time.slice(0, 24).map((time: string, index: number) => ({
-          time: new Date(time).toLocaleTimeString('en', { hour: '2-digit', hour12: false }),
-          temp: weatherData.hourly.temperature_2m[index],
-          precipitation: weatherData.hourly.precipitation_probability[index]
+        aqi: aqiData,
+        airQualityHistory: [], // Not available in OpenWeatherMap API
+        hourlyForecast: forecastData.list.slice(0, 24).map((hour) => ({
+          time: new Date(hour.dt * 1000).toLocaleTimeString('en', { hour: '2-digit', hour12: false }),
+          temp: hour.main.temp,
+          precipitation: hour.pop * 100 // Convert probability to percentage
         }))
-      })
+      });
     } catch (err) {
-      setError('Failed to fetch weather data')
-      console.error(err)
+      setError('Failed to fetch weather data');
+      console.error(err);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
+
+  const fetchAQIData = async (lat: number, lon: number) => {
+    try {
+      const response = await fetch(`https://api.waqi.info/feed/geo:${lat};${lon}/?token=${AQICN_API_KEY}`);
+      const data: AQICNResponse = await response.json();
+      if (data.status === "ok") {
+        return {
+          aqi: data.data.aqi,
+          pm10: data.data.iaqi.pm10?.v || 0,
+          pm25: data.data.iaqi.pm25?.v || 0,
+          o3: data.data.iaqi.o3?.v || 0,
+          no2: data.data.iaqi.no2?.v || 0,
+          so2: data.data.iaqi.so2?.v || 0,
+          co: data.data.iaqi.co?.v || 0,
+          uvi: data.data.iaqi.uvi?.v || 0, // Add UVI to the returned object
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error("Failed to fetch AQI data:", error);
+      return null;
+    }
+  };
 
   const handleSearch = async () => {
-    setLoading(true)
-    setError(null)
+    if (inputValue.trim() === '') return;
+
+    setLoading(true);
+    setError(null);
+
     try {
-      const geoResponse = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(searchQuery)}&count=1&language=${language}&format=json`)
-      const geoData = await geoResponse.json()
-      if (geoData.results && geoData.results.length > 0) {
-        const { latitude, longitude } = geoData.results[0]
-        await fetchWeatherData(latitude, longitude)
-        setExpanded(true)
+      const geoResponse = await fetch(`https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(inputValue)}&limit=5&appid=${OPENWEATHERMAP_API_KEY}`);
+      const geoData = await geoResponse.json();
+      console.log('Geocoding API response:', geoData);
+      if (geoData && geoData.length > 0) {
+        const exactMatch = geoData.find((location: { name: string; country: string }) => 
+          location.name.toLowerCase() === inputValue.toLowerCase() ||
+          `${location.name}, ${location.country}`.toLowerCase() === inputValue.toLowerCase()
+        );
+        const locationToUse = exactMatch || geoData[0];
+        const { lat, lon, name, country } = locationToUse;
+        await fetchWeatherData(lat, lon);
+        const fullLocationName = `${name}, ${country}`;
+        setSelectedLocation(fullLocationName);
+        if (isAutoSearch) {
+          setInputValue(fullLocationName); // Only update input if it's an auto search
+        }
+        setExpanded(true);
       } else {
-        setError('Location not found')
+        setError('Location not found');
       }
     } catch (err) {
-      setError('Failed to search location')
-      console.error(err)
+      setError('Failed to search location');
+      console.error('Search error:', err);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   const handleVoiceSearch = () => {
     // Implement voice search functionality here
     console.log('Voice search initiated')
   }
 
-  const getWeatherDescription = (code: number) => {
-    // Implement a more comprehensive weather code to description mapping
-    const weatherCodes = {
-      0: 'Clear sky',
-      1: 'Mainly clear',
-      2: 'Partly cloudy',
-      3: 'Overcast',
-      45: 'Fog',
-      48: 'Depositing rime fog',
-      51: 'Light drizzle',
-      53: 'Moderate drizzle',
-      55: 'Dense drizzle',
-      56: 'Light freezing drizzle',
-      57: 'Dense freezing drizzle',
-      61: 'Slight rain',
-      63: 'Moderate rain',
-      65: 'Heavy rain',
-      66: 'Light freezing rain',
-      67: 'Heavy freezing rain',
-      71: 'Slight snow fall',
-      73: 'Moderate snow fall',
-      75: 'Heavy snow fall',
-      77: 'Snow grains',
-      80: 'Slight rain showers',
-      81: 'Moderate rain showers',
-      82: 'Violent rain showers',
-      85: 'Slight snow showers',
-      86: 'Heavy snow showers',
-      95: 'Thunderstorm',
-      96: 'Thunderstorm with slight hail',
-      99: 'Thunderstorm with heavy hail',
+  const handleLocationSearch = () => {
+    if ("geolocation" in navigator) {
+      setLoading(true);
+      setIsAutoSearch(true); // Set this to true for automatic searches
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const { latitude, longitude } = position.coords;
+          try {
+            await fetchWeatherData(latitude, longitude);
+            const locationName = await fetchLocationName(latitude, longitude);
+            setInputValue(locationName); // Update the input value
+            setSelectedLocation(locationName);
+            setExpanded(true);
+          } catch (err) {
+            setError('Failed to fetch weather data for your location');
+            console.error(err);
+          } finally {
+            setLoading(false);
+            setIsAutoSearch(false); // Reset after search is complete
+          }
+        },
+        (error) => {
+          setError('Failed to get your location: ' + error.message);
+          setLoading(false);
+          setIsAutoSearch(false); // Reset on error
+        }
+      );
+    } else {
+      setError('Geolocation is not supported by your browser');
     }
-    return weatherCodes[code as keyof typeof weatherCodes] || 'Unknown'
-  }
+  };
+
+  const fetchLocationName = async (lat: number, lon: number) => {
+    try {
+      const response = await fetch(`https://api.openweathermap.org/geo/1.0/reverse?lat=${lat}&lon=${lon}&limit=1&appid=${OPENWEATHERMAP_API_KEY}`);
+      const data = await response.json();
+      if (data && data.length > 0) {
+        return `${data[0].name}, ${data[0].country}`;
+      }
+      return 'Unknown Location';
+    } catch (error) {
+      console.error('Error fetching location name:', error);
+      return 'Unknown Location';
+    }
+  };
 
   const toggleExpanded = () => {
     setExpanded(!expanded)
   }
 
+  const getWeatherIcon = (description: string) => {
+    const lowerDesc = description.toLowerCase();
+    if (lowerDesc.includes('clear')) return <Sun className="w-24 h-24 text-yellow-300" />;
+    if (lowerDesc.includes('cloud') && lowerDesc.includes('sun')) return <CloudSun className="w-24 h-24 text-yellow-300" />;
+    if (lowerDesc.includes('cloud') && lowerDesc.includes('moon')) return <CloudMoon className="w-24 h-24 text-blue-300" />;
+    if (lowerDesc.includes('cloud')) return <Cloud className="w-24 h-24 text-gray-300" />;
+    if (lowerDesc.includes('rain')) return <CloudRain className="w-24 h-24 text-blue-300" />;
+    if (lowerDesc.includes('snow')) return <Snowflake className="w-24 h-24 text-blue-200" />;
+    if (lowerDesc.includes('thunder')) return <CloudLightning className="w-24 h-24 text-yellow-400" />;
+    if (lowerDesc.includes('drizzle')) return <CloudDrizzle className="w-24 h-24 text-blue-300" />;
+    return <Sun className="w-24 h-24 text-yellow-300" />; // default icon
+  };
+
   const instructionSteps = [
-    { title: "Enter Location", description: "Type a city or location in the search box.", icon: MapPin, color: "bg-blue-200 dark:bg-blue-800" },
-    { title: "Search", description: "Click the search button or press Enter to find weather data.", icon: Search, color: "bg-green-200 dark:bg-green-800" },
-    { title: "View Results", description: "Explore detailed weather information and forecasts.", icon: BarChartIcon, color: "bg-yellow-200 dark:bg-yellow-800" },
-    { title: "Customize", description: "Use language and theme toggles to personalize your experience.", icon: Settings, color: "bg-purple-200 dark:bg-purple-800" },
+    { title: t('enterLocation'), description: t('typeLocation'), icon: MapPin, color: "bg-blue-200 dark:bg-blue-800" },
+    { title: t('search'), description: t('clickSearch'), icon: Search, color: "bg-green-200 dark:bg-green-800" },
+    { title: t('viewResults'), description: t('exploreWeather'), icon: BarChartIcon, color: "bg-yellow-200 dark:bg-yellow-800" },
+    { title: t('customize'), description: t('useLanguage'), icon: Settings, color: "bg-purple-200 dark:bg-purple-800" },
   ]
 
-  const renderAQICard = (weatherData: WeatherData) => {
-    const aqiData = [
-      { name: 'PM10', value: weatherData.airQualityHistory[0].pm10 },
-      { name: 'PM2.5', value: weatherData.airQualityHistory[0].pm2_5 },
-    ]
-    const COLORS = ['#0088FE', '#00C49F']
+  const handleLanguageChange = (newLanguage: string) => {
+    setLanguage(newLanguage);
+    i18n.changeLanguage(newLanguage);
+  };
 
-    return (
-      <Card className="bg-white dark:bg-gray-800 border dark:border-gray-700">
-        <CardHeader className="border-b dark:border-gray-700">
-          <CardTitle>Air Quality Index</CardTitle>
-        </CardHeader>
-        <CardContent className="p-4">
-          <div className="flex flex-col items-center">
-            <div className={`w-32 h-32 rounded-full flex items-center justify-center ${getAQIColor(weatherData.aqi)}`}>
-              <span className="text-3xl font-bold text-white">{weatherData.aqi}</span>
-            </div>
-            <Badge className="mt-4 mb-6" variant="secondary">{getAQILabel(weatherData.aqi)}</Badge>
-            <div className="w-full h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={aqiData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    paddingAngle={5}
-                    dataKey="value"
-                  >
-                    {aqiData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ backgroundColor: darkMode ? "#1f2937" : "#fff", color: darkMode ? "#fff" : "#000" }}
-                    formatter={(value: number) => [`${value} µg/m³`, undefined]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex justify-around w-full mt-4">
-              {aqiData.map((entry, index) => (
-                <div key={entry.name} className="flex items-center">
-                  <div className={`w-3 h-3 rounded-full mr-2`} style={{ backgroundColor: COLORS[index] }}></div>
-                  <span>{entry.name}: {entry.value} µg/m³</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    )
-  }
+  const handleInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setInputValue(value);
+    setIsAutoSearch(false);
+    setSelectedSuggestionIndex(-1); // Reset selected index
+
+    if (value.length > 2) {
+      try {
+        const response = await fetch(`https://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(value)}&limit=5&appid=${OPENWEATHERMAP_API_KEY}`);
+        const data = await response.json();
+        setSuggestions(data.map((item: GeocodingResult) => ({
+          name: item.name,
+          country: item.country,
+          countryCode: item.country.toLowerCase()
+        })));
+      } catch (error) {
+        console.error('Error fetching suggestions:', error);
+      }
+    } else {
+      setSuggestions([]);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedSuggestionIndex(prev => 
+        prev < suggestions.length - 1 ? prev + 1 : prev
+      );
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedSuggestionIndex(prev => (prev > 0 ? prev - 1 : prev));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (selectedSuggestionIndex >= 0) {
+        handleSuggestionSelect(suggestions[selectedSuggestionIndex]);
+      } else {
+        handleSearch();
+      }
+    }
+  };
+
+  const handleSuggestionSelect = (suggestion: Suggestion) => {
+    setInputValue(`${suggestion.name}, ${suggestion.country}`);
+    setSuggestions([]);
+    handleSearch();
+  };
 
   return (
-    <div className="min-h-screen w-full overflow-hidden relative">
-      {/* Animated gradient background */}
+    <div className="min-h-screen w-full overflow-hidden relative font-sans">
+      {/* Updated animated gradient background */}
       <div className="absolute inset-0 bg-gradient-to-br from-blue-400 via-purple-500 to-pink-500 animate-gradient-xy"></div>
       
-      {/* Weather particles */}
+      {/* Updated Weather particles */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <WeatherParticles />
+        <EnhancedWeatherParticles />
       </div>
 
-      <div className="relative z-10 min-h-screen w-full flex flex-col items-center justify-center p-4">
+      <div className="relative z-10 min-h-screen w-full flex flex-col items-center justify-start p-4 md:p-8 space-y-8">
         {/* Instructions Section */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="w-full max-w-6xl mb-8"
+          className="w-full max-w-6xl"
         >
           <Card className="bg-white/80 dark:bg-gray-800/80 shadow-xl backdrop-blur-sm">
             <CardHeader>
               <CardTitle className="text-2xl font-bold flex items-center">
-                <HelpCircle className="mr-2" /> How to Use
+                <HelpCircle className="mr-2" /> {t('howToUse')}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -318,7 +452,7 @@ export function WeatherApp() {
             <Card className={`bg-white dark:bg-gray-900 shadow-xl ${expanded ? 'w-full' : 'w-full mx-auto'}`}>
               <CardHeader className="flex flex-col space-y-4 border-b dark:border-gray-700">
                 <div className="flex justify-between items-center">
-                  <CardTitle className="text-2xl font-bold">Weather Dashboard</CardTitle>
+                  <CardTitle className="text-2xl font-bold">{t('weatherDashboard')}</CardTitle>
                   <Button
                     variant="outline"
                     size="icon"
@@ -329,9 +463,9 @@ export function WeatherApp() {
                   </Button>
                 </div>
                 <div className="flex flex-col space-y-2 sm:flex-row sm:items-center sm:justify-between sm:space-y-0 sm:space-x-4">
-                  <Select value={language} onValueChange={setLanguage}>
+                  <Select value={language} onValueChange={handleLanguageChange}>
                     <SelectTrigger className="w-full sm:w-[180px] border-2 dark:border-white">
-                      <SelectValue placeholder="Select Language" />
+                      <SelectValue placeholder={t('selectLanguage')} />
                     </SelectTrigger>
                     <SelectContent>
                       {languages.map((lang) => (
@@ -362,22 +496,48 @@ export function WeatherApp() {
                 </div>
               </CardHeader>
               <CardContent className="p-6">
-                <div className="flex space-x-2 mb-6">
+                <div className="flex space-x-2 mb-6 relative">
                   <Input
                     type="text"
-                    placeholder="Search location..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={t('searchLocation')}
+                    value={inputValue}
+                    onChange={handleInputChange}
+                    onKeyDown={handleKeyDown} // Add this line
                     className="flex-grow border-2 dark:border-white"
-                    onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
                   />
+                  {suggestions.length > 0 && (
+                    <div className="absolute top-full left-0 w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg z-10">
+                      {suggestions.map((suggestion, index) => (
+                        <div
+                          key={index}
+                          className={`px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center ${
+                            index === selectedSuggestionIndex ? 'bg-gray-100 dark:bg-gray-700' : ''
+                          }`}
+                          onClick={() => handleSuggestionSelect(suggestion)}
+                        >
+                          <Image
+                            src={`https://flagcdn.com/24x18/${suggestion.countryCode}.png`}
+                            alt={`${suggestion.country} flag`}
+                            width={24}
+                            height={18}
+                            className="mr-2"
+                          />
+                          {`${suggestion.name}, ${suggestion.country}`}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <Button onClick={handleSearch} className="border-2 dark:border-white">
                     <Search className="h-4 w-4 mr-2" />
-                    Search
+                    {t('search')}
+                  </Button>
+                  <Button onClick={handleLocationSearch} className="border-2 dark:border-white">
+                    <MapPin className="h-4 w-4 mr-2" />
+                    {t('myLocation')}
                   </Button>
                   <Button onClick={handleVoiceSearch} variant="outline" className="border-2 dark:border-white">
                     <Mic className="h-4 w-4" />
-                    <span className="sr-only">Voice Search</span>
+                    <span className="sr-only">{t('voiceSearch')}</span>
                   </Button>
                 </div>
 
@@ -404,36 +564,40 @@ export function WeatherApp() {
                     {/* Current Weather Card */}
                     <Card className="bg-gradient-to-br from-blue-500 to-purple-600 text-white">
                       <CardHeader>
-                        <CardTitle className="text-2xl font-bold">Current Weather</CardTitle>
+                        <CardTitle className="text-2xl font-bold">{t('currentWeather')}</CardTitle>
                       </CardHeader>
                       <CardContent>
                         <div className="flex flex-col md:flex-row justify-between items-center">
                           <div className="flex items-center mb-4 md:mb-0">
-                            <Sun className="w-24 h-24 text-yellow-300 mr-6" />
-                            <div>
+                            {getWeatherIcon(weatherData.current.description)}
+                            <div className="ml-6">
                               <p className="text-6xl font-bold">{weatherData.current.temp}°C</p>
-                              <p className="text-xl mt-2">{weatherData.current.description}</p>
+                              <p className="text-xl mt-2">{t('weatherDescription', { description: weatherData.current.description })}</p>
+                              <div className="flex items-center mt-2">
+                                <Thermometer className="w-5 h-5 mr-2" />
+                                <p className="text-lg">{t('feelsLike')}: {weatherData.current.feels_like}°C</p>
+                              </div>
                             </div>
                           </div>
                           <div className="grid grid-cols-2 gap-4 text-center">
                             <div className="bg-white/20 p-3 rounded-lg">
                               <Droplets className="w-8 h-8 mx-auto text-blue-200" />
-                              <p className="mt-2 font-semibold">Humidity</p>
+                              <p className="mt-2 font-semibold">{t('humidity')}</p>
                               <p className="text-lg">{weatherData.current.humidity}%</p>
                             </div>
                             <div className="bg-white/20 p-3 rounded-lg">
                               <Wind className="w-8 h-8 mx-auto text-blue-200" />
-                              <p className="mt-2 font-semibold">Wind Speed</p>
+                              <p className="mt-2 font-semibold">{t('windSpeed')}</p>
                               <p className="text-lg">{weatherData.current.windSpeed} m/s</p>
                             </div>
                             <div className="bg-white/20 p-3 rounded-lg">
                               <CloudRain className="w-8 h-8 mx-auto text-blue-200" />
-                              <p className="mt-2 font-semibold">Precipitation</p>
+                              <p className="mt-2 font-semibold">{t('precipitation')}</p>
                               <p className="text-lg">{weatherData.current.precipitation} mm</p>
                             </div>
                             <div className="bg-white/20 p-3 rounded-lg">
                               <Thermometer className="w-8 h-8 mx-auto text-blue-200" />
-                              <p className="mt-2 font-semibold">Pressure</p>
+                              <p className="mt-2 font-semibold">{t('pressure')}</p>
                               <p className="text-lg">{weatherData.current.pressure} hPa</p>
                             </div>
                           </div>
@@ -441,15 +605,15 @@ export function WeatherApp() {
                         <div className="mt-6 flex justify-between items-center bg-white/10 p-4 rounded-lg">
                           <div className="flex items-center">
                             <Umbrella className="w-6 h-6 mr-2 text-yellow-300" />
-                            <span>UV Index: {weatherData.current.uv_index}</span>
+                            <span>{t('uvIndex')}: {weatherData.current.uv_index}</span>
                           </div>
                           <div className="flex items-center">
                             <Compass className="w-6 h-6 mr-2 text-yellow-300" />
-                            <span>Wind Direction: N/A</span>
+                            <span>{t('windDirection')}: N/A</span>
                           </div>
                           <div className="flex items-center">
-                            <Sun className="w-6 h-6 mr-2 text-yellow-300" />
-                            <span>Feels Like: N/A°C</span>
+                            <Thermometer className="w-6 h-6 mr-2 text-yellow-300" />
+                            <span>{t('feelsLike')}: {weatherData.current.feels_like}°C</span>
                           </div>
                         </div>
                       </CardContent>
@@ -460,7 +624,7 @@ export function WeatherApp() {
                       <div className="lg:col-span-2">
                         <Card className="bg-white dark:bg-gray-800 border dark:border-gray-700 h-full">
                           <CardHeader className="border-b dark:border-gray-700">
-                            <CardTitle>Hourly Forecast</CardTitle>
+                            <CardTitle>{t('hourlyForecast')}</CardTitle>
                           </CardHeader>
                           <CardContent className="p-4 h-[400px]">
                             <ResponsiveContainer width="100%" height="100%">
@@ -475,8 +639,8 @@ export function WeatherApp() {
                                 <YAxis yAxisId="right" orientation="right" stroke={darkMode ? "#fff" : "#000"} />
                                 <Tooltip contentStyle={{ backgroundColor: darkMode ? "#1f2937" : "#fff", color: darkMode ? "#fff" : "#000" }} />
                                 <Legend />
-                                <Line yAxisId="left" type="monotone" dataKey="temp" name="Temperature (°C)" stroke="#8884d8" strokeWidth={2} />
-                                <Line yAxisId="right" type="monotone" dataKey="precipitation" name="Precipitation (%)" stroke="#82ca9d" strokeWidth={2} />
+                                <Line yAxisId="left" type="monotone" dataKey="temp" name={t('temperature') + " (°C)"} stroke="#8884d8" strokeWidth={2} />
+                                <Line yAxisId="right" type="monotone" dataKey="precipitation" name={t('precipitation') + " (%)"} stroke="#82ca9d" strokeWidth={2} />
                               </LineChart>
                             </ResponsiveContainer>
                           </CardContent>
@@ -484,65 +648,79 @@ export function WeatherApp() {
                       </div>
 
                       <div className="lg:col-span-1">
-                        <Card className="bg-white dark:bg-gray-800 border dark:border-gray-700 h-full">
-                          <CardHeader className="border-b dark:border-gray-700">
-                            <CardTitle>Air Quality Index</CardTitle>
-                          </CardHeader>
-                          <CardContent className="p-4 flex flex-col h-[400px]">
-                            <div className="flex flex-col items-center justify-between flex-grow">
-                              <div className={`w-24 h-24 rounded-full flex items-center justify-center ${getAQIColor(weatherData.aqi)}`}>
-                                <span className="text-2xl font-bold text-white">{weatherData.aqi}</span>
+                        {weatherData.aqi && (
+                          <Card className="bg-white dark:bg-gray-800 border dark:border-gray-700">
+                            <CardHeader className="border-b dark:border-gray-700">
+                              <CardTitle>{t('airQualityIndex')}</CardTitle>
+                            </CardHeader>
+                            <CardContent className="p-4">
+                              <div className="flex flex-col items-center">
+                                <div className={`w-32 h-32 rounded-full flex items-center justify-center ${getAQIColor(weatherData.aqi.aqi)}`}>
+                                  <span className="text-3xl font-bold text-white">{weatherData.aqi.aqi}</span>
+                                </div>
+                                <Badge className="mt-4 mb-6" variant="secondary">{getAQILabel(weatherData.aqi.aqi)}</Badge>
+                                <div className="w-full h-48">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <PieChart>
+                                      <Pie
+                                        data={[
+                                          { name: 'PM10', value: weatherData.aqi.pm10 },
+                                          { name: 'PM2.5', value: weatherData.aqi.pm25 },
+                                          { name: 'O3', value: weatherData.aqi.o3 },
+                                          { name: 'NO2', value: weatherData.aqi.no2 },
+                                          { name: 'SO2', value: weatherData.aqi.so2 },
+                                          { name: 'CO', value: weatherData.aqi.co },
+                                        ]}
+                                        cx="50%"
+                                        cy="50%"
+                                        innerRadius={60}
+                                        outerRadius={80}
+                                        fill="#8884d8"
+                                        paddingAngle={5}
+                                        dataKey="value"
+                                      >
+                                        {[
+                                          { name: 'PM10', value: weatherData.aqi.pm10 },
+                                          { name: 'PM2.5', value: weatherData.aqi.pm25 },
+                                          { name: 'O3', value: weatherData.aqi.o3 },
+                                          { name: 'NO2', value: weatherData.aqi.no2 },
+                                          { name: 'SO2', value: weatherData.aqi.so2 },
+                                          { name: 'CO', value: weatherData.aqi.co },
+                                        ].map((entry, index) => (
+                                          <Cell key={`cell-${index}`} fill={['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#9884d8', '#82ca9d'][index % 6]} />
+                                        ))}
+                                      </Pie>
+                                      <Tooltip
+                                        contentStyle={{ backgroundColor: darkMode ? "#1f2937" : "#fff", color: darkMode ? "#fff" : "#000" }}
+                                        formatter={(value: number) => [`${value} µg/m³`, undefined]}
+                                      />
+                                    </PieChart>
+                                  </ResponsiveContainer>
+                                </div>
+                                <div className="flex flex-wrap justify-around w-full mt-4">
+                                  {[
+                                    { name: 'PM10', value: weatherData.aqi.pm10 },
+                                    { name: 'PM2.5', value: weatherData.aqi.pm25 },
+                                    { name: 'O3', value: weatherData.aqi.o3 },
+                                    { name: 'NO2', value: weatherData.aqi.no2 },
+                                    { name: 'SO2', value: weatherData.aqi.so2 },
+                                    { name: 'CO', value: weatherData.aqi.co },
+                                  ].map((entry, index) => (
+                                    <div key={entry.name} className="flex items-center m-2">
+                                      <div className={`w-3 h-3 rounded-full mr-2`} style={{ backgroundColor: ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#9884d8', '#82ca9d'][index % 6] }}></div>
+                                      <span>{entry.name}: {entry.value} µg/m³</span>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                              <Badge className="my-2" variant="secondary">{getAQILabel(weatherData.aqi)}</Badge>
-                              <div className="w-full h-48">
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <PieChart>
-                                    <Pie
-                                      data={[
-                                        { name: 'PM10', value: weatherData.airQualityHistory[0].pm10 },
-                                        { name: 'PM2.5', value: weatherData.airQualityHistory[0].pm2_5 },
-                                      ]}
-                                      cx="50%"
-                                      cy="50%"
-                                      innerRadius={40}
-                                      outerRadius={60}
-                                      fill="#8884d8"
-                                      paddingAngle={5}
-                                      dataKey="value"
-                                    >
-                                      {[
-                                        { name: 'PM10', value: weatherData.airQualityHistory[0].pm10 },
-                                        { name: 'PM2.5', value: weatherData.airQualityHistory[0].pm2_5 },
-                                      ].map((entry, index) => (
-                                        <Cell key={`cell-${index}`} fill={['#0088FE', '#00C49F'][index % 2]} />
-                                      ))}
-                                    </Pie>
-                                    <Tooltip
-                                      contentStyle={{ backgroundColor: darkMode ? "#1f2937" : "#fff", color: darkMode ? "#fff" : "#000" }}
-                                      formatter={(value: number) => [`${value} µg/m³`, undefined]}
-                                    />
-                                  </PieChart>
-                                </ResponsiveContainer>
-                              </div>
-                              <div className="flex justify-around w-full mt-2">
-                                {[
-                                  { name: 'PM10', value: weatherData.airQualityHistory[0].pm10 },
-                                  { name: 'PM2.5', value: weatherData.airQualityHistory[0].pm2_5 },
-                                ].map((entry, index) => (
-                                  <div key={entry.name} className="flex items-center">
-                                    <div className={`w-3 h-3 rounded-full mr-2`} style={{ backgroundColor: ['#0088FE', '#00C49F'][index] }}></div>
-                                    <span className="text-sm">{entry.name}: {entry.value} µg/m³</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
+                            </CardContent>
+                          </Card>
+                        )}
                       </div>
 
                       <Card className="bg-white dark:bg-gray-800 border dark:border-gray-700 col-span-1 lg:col-span-3">
                         <CardHeader className="border-b dark:border-gray-700">
-                          <CardTitle>7-Day Forecast</CardTitle>
+                          <CardTitle>{t('sevenDayForecast')}</CardTitle>
                         </CardHeader>
                         <CardContent className="p-4">
                           <div className="h-[300px]">
@@ -553,33 +731,9 @@ export function WeatherApp() {
                                 <YAxis yAxisId="right" orientation="right" stroke={darkMode ? "#fff" : "#000"} />
                                 <Tooltip contentStyle={{ backgroundColor: darkMode ? "#1f2937" : "#fff", color: darkMode ? "#fff" : "#000" }} />
                                 <Legend />
-                                <Bar yAxisId="left" dataKey="temp" name="Temperature (°C)" fill="#8884d8" />
-                                <Bar yAxisId="right" dataKey="precipitation" name="Precipitation (mm)" fill="#82ca9d" />
+                                <Bar yAxisId="left" dataKey="temp" name={t('temperature') + " (°C)"} fill="#8884d8" />
+                                <Bar yAxisId="right" dataKey="precipitation" name={t('precipitation') + " (mm)"} fill="#82ca9d" />
                               </BarChart>
-                            </ResponsiveContainer>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      <Card className="bg-white dark:bg-gray-800 border dark:border-gray-700 col-span-1 lg:col-span-3">
-                        <CardHeader className="border-b dark:border-gray-700">
-                          <CardTitle>Air Quality History</CardTitle>
-                        </CardHeader>
-                        <CardContent className="p-4">
-                          <div className="h-[300px]">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <LineChart data={weatherData.airQualityHistory}>
-                                <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? "#374151" : "#e5e7eb"} />
-                                <XAxis dataKey="date" stroke={darkMode ? "#fff" : "#000"} />
-                                <YAxis stroke={darkMode ? "#fff" : "#000"} />
-                                <Tooltip contentStyle={{ backgroundColor: darkMode ? "#1f2937" : "#fff", color: darkMode ? "#fff" : "#000" }} />
-                                <Legend />
-                                <Line type="monotone" dataKey="pm10" name="PM10" stroke="#8884d8" strokeWidth={2} />
-                                <Line type="monotone" dataKey="pm2_5" name="PM2.5" stroke="#82ca9d" strokeWidth={2} />
-                                <Line type="monotone" dataKey="o3" name="Ozone" stroke="#ffc658" strokeWidth={2} />
-                                <Line type="monotone" dataKey="no2" name="NO₂" stroke="#ff8042" strokeWidth={2} />
-                                <Line type="monotone" dataKey="so2" name="SO₂" stroke="#00C49F" strokeWidth={2} />
-                              </LineChart>
                             </ResponsiveContainer>
                           </div>
                         </CardContent>
@@ -596,22 +750,60 @@ export function WeatherApp() {
   )
 }
 
-function WeatherParticles() {
+function EnhancedWeatherParticles() {
   return (
-    <svg className="absolute inset-0 w-full h-full" xmlns="http://www.w3.org/2000/svg">
-      <g className="animate-float-slow">
-        <circle cx="10%" cy="20%" r="8" fill="white" opacity="0.3" />
-        <circle cx="25%" cy="60%" r="6" fill="white" opacity="0.3" />
-        <circle cx="40%" cy="40%" r="10" fill="white" opacity="0.3" />
-        <circle cx="60%" cy="30%" r="7" fill="white" opacity="0.3" />
-        <circle cx="75%" cy="70%" r="9" fill="white" opacity="0.3" />
-        <circle cx="90%" cy="50%" r="8" fill="white" opacity="0.3" />
-      </g>
-      <g className="animate-float-fast">
-        <path d="M30 20 Q 40 15, 50 20 T 70 20" stroke="white" fill="transparent" opacity="0.2" />
-        <path d="M50 40 Q 60 35, 70 40 T 90 40" stroke="white" fill="transparent" opacity="0.2" />
-        <path d="M70 60 Q 80 55, 90 60 T 110 60" stroke="white" fill="transparent" opacity="0.2" />
-      </g>
-    </svg>
-  )
+    <div className="absolute inset-0">
+      {[...Array(20)].map((_, i) => (
+        <motion.div
+          key={i}
+          className="absolute rounded-full bg-white opacity-30"
+          initial={{
+            x: Math.random() * window.innerWidth,
+            y: Math.random() * window.innerHeight,
+            scale: Math.random() * 0.5 + 0.5,
+          }}
+          animate={{
+            x: Math.random() * window.innerWidth,
+            y: Math.random() * window.innerHeight,
+            scale: Math.random() * 0.5 + 0.5,
+          }}
+          transition={{
+            duration: Math.random() * 10 + 20,
+            repeat: Infinity,
+            repeatType: "reverse",
+          }}
+          style={{
+            width: `${Math.random() * 10 + 5}px`,
+            height: `${Math.random() * 10 + 5}px`,
+          }}
+        />
+      ))}
+      {[...Array(3)].map((_, i) => (
+        <motion.div
+          key={`cloud-${i}`}
+          className="absolute bg-white opacity-20"
+          initial={{
+            x: -200,
+            y: Math.random() * window.innerHeight,
+            scale: Math.random() * 0.5 + 0.5,
+          }}
+          animate={{
+            x: window.innerWidth + 200,
+            y: Math.random() * window.innerHeight,
+          }}
+          transition={{
+            duration: Math.random() * 60 + 60,
+            repeat: Infinity,
+            repeatType: "loop",
+          }}
+          style={{
+            width: `${Math.random() * 200 + 100}px`,
+            height: `${Math.random() * 60 + 40}px`,
+            borderRadius: '50%',
+            filter: 'blur(10px)',
+          }}
+        />
+      ))}
+    </div>
+  );
 }

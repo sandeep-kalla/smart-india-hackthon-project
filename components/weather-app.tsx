@@ -746,6 +746,18 @@ export function WeatherApp() {
 }
 
 function EnhancedWeatherParticles() {
+  const [windowSize, setWindowSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    function handleResize() {
+      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+    }
+    
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   return (
     <div className="absolute inset-0">
       {[...Array(20)].map((_, i) => (
@@ -753,13 +765,13 @@ function EnhancedWeatherParticles() {
           key={i}
           className="absolute rounded-full bg-white opacity-30"
           initial={{
-            x: Math.random() * window.innerWidth,
-            y: Math.random() * window.innerHeight,
+            x: Math.random() * windowSize.width,
+            y: Math.random() * windowSize.height,
             scale: Math.random() * 0.5 + 0.5,
           }}
           animate={{
-            x: Math.random() * window.innerWidth,
-            y: Math.random() * window.innerHeight,
+            x: Math.random() * windowSize.width,
+            y: Math.random() * windowSize.height,
             scale: Math.random() * 0.5 + 0.5,
           }}
           transition={{
@@ -779,12 +791,12 @@ function EnhancedWeatherParticles() {
           className="absolute bg-white opacity-20"
           initial={{
             x: -200,
-            y: Math.random() * window.innerHeight,
+            y: Math.random() * windowSize.height,
             scale: Math.random() * 0.5 + 0.5,
           }}
           animate={{
-            x: window.innerWidth + 200,
-            y: Math.random() * window.innerHeight,
+            x: windowSize.width + 200,
+            y: Math.random() * windowSize.height,
           }}
           transition={{
             duration: Math.random() * 60 + 60,

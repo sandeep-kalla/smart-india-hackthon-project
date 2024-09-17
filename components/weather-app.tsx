@@ -165,7 +165,6 @@ export function WeatherApp() {
       ]);
 
       const aqiData = await fetchAQIData(lat, lon);
-      const locationName = await fetchLocationName(lat, lon);
 
       setWeatherData({
         current: {

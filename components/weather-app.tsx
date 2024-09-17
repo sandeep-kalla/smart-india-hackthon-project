@@ -138,7 +138,6 @@ export function WeatherApp() {
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [inputValue, setInputValue] = useState('');
-  const [selectedLocation, setSelectedLocation] = useState('');
   const [isAutoSearch, setIsAutoSearch] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
@@ -167,7 +166,6 @@ export function WeatherApp() {
 
       const aqiData = await fetchAQIData(lat, lon);
       const locationName = await fetchLocationName(lat, lon);
-      setSelectedLocation(locationName);
 
       setWeatherData({
         current: {
@@ -243,7 +241,6 @@ export function WeatherApp() {
         const { lat, lon, name, country } = locationToUse;
         await fetchWeatherData(lat, lon);
         const fullLocationName = `${name}, ${country}`;
-        setSelectedLocation(fullLocationName);
         if (isAutoSearch) {
           setInputValue(fullLocationName); // Only update input if it's an auto search
         }
@@ -275,7 +272,6 @@ export function WeatherApp() {
             await fetchWeatherData(latitude, longitude);
             const locationName = await fetchLocationName(latitude, longitude);
             setInputValue(locationName); // Update the input value
-            setSelectedLocation(locationName);
             setExpanded(true);
           } catch (err) {
             setError('Failed to fetch weather data for your location');
